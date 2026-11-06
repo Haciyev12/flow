@@ -1,11 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Keyboard, Download, Upload, Trash2, Info,
-  CheckCircle2, AlertTriangle,
+  CheckCircle2, AlertTriangle, Pencil, X,
 } from "lucide-react";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Layout helpers ────────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -25,26 +25,30 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 function Row({
-  icon, label, description, action,
+  icon, label, description, action, children,
 }: {
   icon: React.ReactNode;
   label: string;
   description?: string;
   action?: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-4 px-5 py-4 border-b border-line last:border-0">
-      <div className="text-dim shrink-0">{icon}</div>
-      <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-medium text-hi">{label}</p>
-        {description && <p className="text-[12px] text-lo mt-0.5">{description}</p>}
+    <div className="px-5 py-4 border-b border-line last:border-0">
+      <div className="flex items-center gap-4">
+        <div className="text-dim shrink-0">{icon}</div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-medium text-hi">{label}</p>
+          {description && <p className="text-[12px] text-lo mt-0.5">{description}</p>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
-      {action && <div className="shrink-0">{action}</div>}
+      {children}
     </div>
   );
 }
 
-// ── Keyboard shortcut badge ───────────────────────────────────────────────────
+// ── Key badge ─────────────────────────────────────────────────────────────────
 
 function Keys({ keys }: { keys: string[] }) {
   return (
@@ -58,6 +62,199 @@ function Keys({ keys }: { keys: string[] }) {
         </kbd>
       ))}
     </div>
+  );
+}
+
+// ── Shortcut utilities ────────────────────────────────────────────────────────
+
+/** Convert a Tauri shortcut string to display symbols. */
+function shortcutToKeys(shortcut: string): string[] {
+  return shortcut.split("+").map((part) => {
+    switch (part) {
+      case "CommandOrControl":
+      case "CmdOrCtrl":    return "⌘";
+      case "Shift":        return "⇧";
+      case "Alt":          return "⌥";
+      case "Control":      return "⌃";
+      case "Super":        return "⌘";
+      case "Space":        return "Space";
+      default:             return part;
+    }
+  });
+}
+
+/** Map a DOM key name to Tauri's key name format. Returns null for unknown keys. */
+function domKeyToTauri(key: string): string | null {
+  if (key === " ") return "Space";
+  if (key.length === 1 && /[A-Za-z0-9]/.test(key)) return key.toUpperCase();
+  if (/^F\d+$/.test(key)) return key;
+  const special: Record<string, string> = {
+    ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+    Enter: "Return", Escape: "Escape", Tab: "Tab",
+    Backspace: "Backspace", Delete: "Delete",
+    ",": "Comma", ".": "Period", "/": "Slash", ";": "Semicolon",
+    "'": "Quote", "[": "BracketLeft", "]": "BracketRight",
+    "\\": "Backslash", "`": "Grave", "-": "Minus", "=": "Equal",
+  };
+  return special[key] ?? null;
+}
+
+/** Build a Tauri shortcut string from a keydown event. Returns null if incomplete. */
+function captureFromEvent(e: React.KeyboardEvent): string | null {
+  const isModifier = ["Meta", "Control", "Alt", "Shift"].includes(e.key);
+  if (isModifier) return null; // Still waiting for the main key
+
+  const tauriKey = domKeyToTauri(e.key);
+  if (!tauriKey) return null;
+
+  const parts: string[] = [];
+  if (e.metaKey || e.ctrlKey) parts.push("CommandOrControl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+
+  if (parts.length === 0) return null; // No modifier — invalid
+  parts.push(tauriKey);
+  return parts.join("+");
+}
+
+// ── Shortcut recorder ─────────────────────────────────────────────────────────
+
+function ShortcutRecorder({ onSaved }: { onSaved: (msg: string) => void }) {
+  const [current, setCurrent]     = useState<string | null>(null);
+  const [mode, setMode]           = useState<"display" | "recording" | "saving">("display");
+  const [captured, setCaptured]   = useState<string | null>(null);
+  const [error, setError]         = useState<string | null>(null);
+  const captureRef                = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    invoke<string>("get_palette_shortcut").then(setCurrent).catch(() => {});
+  }, []);
+
+  function startRecording() {
+    setCaptured(null);
+    setError(null);
+    setMode("recording");
+    setTimeout(() => captureRef.current?.focus(), 30);
+  }
+
+  function cancelRecording() {
+    setCaptured(null);
+    setError(null);
+    setMode("display");
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === "Escape") { cancelRecording(); return; }
+
+    const shortcut = captureFromEvent(e);
+    if (shortcut) {
+      setCaptured(shortcut);
+      setError(null);
+      setMode("saving");
+    }
+  }
+
+  async function save() {
+    if (!captured) return;
+    setError(null);
+    try {
+      await invoke("set_palette_shortcut", { shortcut: captured });
+      setCurrent(captured);
+      setCaptured(null);
+      setMode("display");
+      onSaved(`Shortcut changed to ${shortcutToKeys(captured).join("")}`);
+    } catch (e) {
+      setError(String(e));
+      setMode("recording");
+      setTimeout(() => captureRef.current?.focus(), 30);
+    }
+  }
+
+  const displayKeys = current ? shortcutToKeys(current) : ["⌘", "⇧", "Space"];
+  const capturedKeys = captured ? shortcutToKeys(captured) : [];
+
+  return (
+    <Row
+      icon={<Keyboard size={16} strokeWidth={1.8} />}
+      label="Open Command Palette"
+      description="Global shortcut — works from anywhere on your Mac."
+    >
+      <div className="ml-9 mt-3 space-y-2">
+        {/* Display mode */}
+        {mode === "display" && (
+          <div className="flex items-center gap-3">
+            <Keys keys={displayKeys} />
+            <button
+              onClick={startRecording}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] text-dim hover:text-lo hover:bg-hover border border-transparent hover:border-line transition-colors"
+            >
+              <Pencil size={11} strokeWidth={1.8} />
+              Change
+            </button>
+          </div>
+        )}
+
+        {/* Recording mode */}
+        {mode === "recording" && (
+          <div className="space-y-2">
+            <div
+              ref={captureRef}
+              tabIndex={0}
+              onKeyDown={handleKeyDown}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-hover border border-accent/50 outline-none cursor-default text-[12px] text-dim focus:border-accent transition-colors"
+            >
+              <Keyboard size={13} strokeWidth={1.8} className="text-accent shrink-0" />
+              Press your shortcut combination…
+              <span className="ml-auto text-[10px] text-dim/60">Esc to cancel</span>
+            </div>
+            <button
+              onClick={cancelRecording}
+              className="text-[11px] text-dim hover:text-lo transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* Saving mode — preview + confirm */}
+        {mode === "saving" && captured && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-hover border border-line">
+              <span className="text-[11px] text-dim">New shortcut:</span>
+              <Keys keys={capturedKeys} />
+            </div>
+            {error && (
+              <p className="text-[11px] text-red-400">{error}</p>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={save}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-[12px] font-medium hover:opacity-90 transition-opacity"
+              >
+                <CheckCircle2 size={12} strokeWidth={2} />
+                Save
+              </button>
+              <button
+                onClick={() => { setCaptured(null); setMode("recording"); setTimeout(() => captureRef.current?.focus(), 30); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-card border border-line text-[12px] text-lo hover:text-hi transition-colors"
+              >
+                <X size={12} strokeWidth={2} />
+                Re-capture
+              </button>
+              <button
+                onClick={cancelRecording}
+                className="text-[11px] text-dim hover:text-lo transition-colors px-2"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Row>
   );
 }
 
@@ -166,7 +363,7 @@ function ClearDataModal({ onConfirm, onCancel }: {
         </div>
         <p className="text-[13px] text-lo leading-relaxed mb-5">
           This permanently deletes your entire Library, all workspaces, and your activity history.
-          This cannot be undone. Export a backup first if you want to restore later.
+          Export a backup first if you want to restore later.
         </p>
         <div className="flex justify-end gap-2">
           <button onClick={onCancel} className="px-4 py-2 rounded-lg text-[13px] text-lo hover:text-hi hover:bg-hover transition-colors">
@@ -187,7 +384,7 @@ function ClearDataModal({ onConfirm, onCancel }: {
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
-  useState(() => { setTimeout(onDone, 4000); });
+  useEffect(() => { const t = setTimeout(onDone, 4000); return () => clearTimeout(t); }, [onDone]);
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2.5 bg-card border border-line rounded-xl shadow-lg text-[12px] text-lo">
       <CheckCircle2 size={14} className="text-accent-green shrink-0" />
@@ -212,11 +409,11 @@ export function Settings() {
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
-      a.href     = url;
+      a.href = url;
       a.download = `flow-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      setToast("Library exported to your Downloads folder.");
+      setToast("Library exported.");
     } catch (e) {
       setToast(`Export failed: ${String(e)}`);
     }
@@ -241,20 +438,14 @@ export function Settings() {
         {/* Global shortcut */}
         <Section title="Shortcuts">
           <Card>
-            <Row
-              icon={<Keyboard size={16} strokeWidth={1.8} />}
-              label="Open Command Palette"
-              description="Open from anywhere on your Mac to search and launch items."
-              action={<Keys keys={["⌘", "⇧", "Space"]} />}
-            />
+            <ShortcutRecorder onSaved={(msg) => setToast(msg)} />
           </Card>
 
           <Card>
             {[
-              { label: "Navigate results",      keys: ["↑", "↓"] },
-              { label: "Execute selected",       keys: ["↵"] },
-              { label: "Close palette",          keys: ["Esc"] },
-              { label: "Move item up / down",    keys: ["↑", "↓"] },
+              { label: "Navigate results",   keys: ["↑", "↓"] },
+              { label: "Execute selected",   keys: ["↵"] },
+              { label: "Close palette",      keys: ["Esc"] },
             ].map(({ label, keys }) => (
               <Row
                 key={label}
@@ -324,16 +515,13 @@ export function Settings() {
               icon={<Info size={16} strokeWidth={1.8} />}
               label="Flow"
               description="Personal desktop automation — built with Tauri, React, and Rust."
-              action={
-                <span className="text-[11px] text-dim font-mono">v0.1.0</span>
-              }
+              action={<span className="text-[11px] text-dim font-mono">v0.1.0</span>}
             />
           </Card>
         </Section>
 
       </div>
 
-      {/* Modals */}
       {modal === "import" && (
         <ImportModal
           onDone={(msg) => { setModal(null); setToast(msg); }}

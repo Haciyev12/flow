@@ -449,6 +449,57 @@ fn clear_all_data(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Shortcut settings ─────────────────────────────────────────────────────────
+
+const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+Space";
+
+/// Reads the saved palette shortcut from settings.json, falling back to the default.
+fn load_saved_shortcut(app: &tauri::AppHandle) -> String {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("paletteShortcut")
+                .and_then(|s| s.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
+}
+
+#[tauri::command]
+fn get_palette_shortcut(app: tauri::AppHandle) -> String {
+    load_saved_shortcut(&app)
+}
+
+#[tauri::command]
+fn set_palette_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Unregister the current shortcut.
+    let old = load_saved_shortcut(&app);
+    let _ = app.global_shortcut().unregister(old.as_str());
+
+    // Try registering the new one; restore old on failure.
+    if let Err(e) = app.global_shortcut().register(shortcut.as_str()) {
+        let _ = app.global_shortcut().register(old.as_str());
+        return Err(format!("Could not register shortcut: {}", e));
+    }
+
+    // Persist.
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let settings = serde_json::json!({ "paletteShortcut": shortcut });
+    std::fs::write(
+        dir.join("settings.json"),
+        serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── App entry ─────────────────────────────────────────────────────────────────
 
 fn toggle_palette(app: &tauri::AppHandle) {
@@ -479,8 +530,9 @@ pub fn run() {
         )
         .setup(|app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            let shortcut = load_saved_shortcut(&app.handle().clone());
             app.global_shortcut()
-                .register("CommandOrControl+Shift+Space")
+                .register(shortcut.as_str())
                 .map_err(|e| e.to_string())?;
             Ok(())
         })
@@ -502,6 +554,8 @@ pub fn run() {
             export_config,
             import_config,
             clear_all_data,
+            get_palette_shortcut,
+            set_palette_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
