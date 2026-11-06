@@ -62,6 +62,7 @@ export interface LauncherItem {
   color: string;
   createdAt: string;
   projectCategory?: string;
+  favorite?: boolean;
 }
 
 // ── Workspace model ───────────────────────────────────────────────────────────
@@ -71,6 +72,18 @@ export type WorkspaceIconName =
   | "briefcase" | "star" | "coffee" | "music" | "target"
   | "heart" | "terminal";
 
+export interface WorkspaceItemSettings {
+  autoExecute: boolean;
+  confirmBefore: boolean;
+  continueOnFailure: boolean;
+}
+
+export const DEFAULT_ITEM_SETTINGS: WorkspaceItemSettings = {
+  autoExecute: true,
+  confirmBefore: false,
+  continueOnFailure: true,
+};
+
 export interface Workspace {
   id: string;
   name: string;
@@ -79,6 +92,36 @@ export interface Workspace {
   color: string;
   /** Ordered references to LauncherItem.id — no data is duplicated. */
   itemIds: string[];
+  /** Per-item execution settings keyed by LauncherItem.id. */
+  itemSettings?: Record<string, WorkspaceItemSettings>;
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Execution engine ──────────────────────────────────────────────────────────
+
+export type ExecutionItemStatus = "pending" | "running" | "success" | "failed" | "skipped";
+
+export interface ItemExecutionState {
+  id: string;
+  status: ExecutionItemStatus;
+  error?: string;
+}
+
+export type WorkspaceExecutionStatus =
+  | "running"
+  | "paused_confirm"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface WorkspaceExecutionState {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceColor: string;
+  workspaceIcon: WorkspaceIconName;
+  status: WorkspaceExecutionStatus;
+  items: ItemExecutionState[];
+  currentIndex: number;
+  confirmItem?: LauncherItem;
 }

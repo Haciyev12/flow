@@ -86,6 +86,7 @@ export function WorkspaceFormModal({ workspace, onSave, onClose }: WorkspaceForm
         icon: form.icon,
         color: form.color,
         itemIds: workspace?.itemIds ?? [],
+        itemSettings: workspace?.itemSettings ?? {},
         createdAt: workspace?.createdAt ?? now,
         updatedAt: now,
       });

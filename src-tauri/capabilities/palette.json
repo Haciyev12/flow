@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "palette",
+  "description": "Capability for the command palette window",
+  "windows": ["palette"],
+  "permissions": [
+    "core:default"
+  ]
+}

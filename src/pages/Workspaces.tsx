@@ -4,12 +4,19 @@ import {
   X, AppWindow, FolderOpen, FileText, Folder, Globe,
   Code2, BookOpen, Zap, Target, Briefcase, Star,
   Coffee, Music, Heart, Terminal, Layers, AlertTriangle,
+  Play, Settings2, GripVertical,
 } from "lucide-react";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { useLauncher } from "../hooks/useLauncher";
+import { useWorkspaceExecution } from "../hooks/useWorkspaceExecution";
 import { WorkspaceFormModal } from "../components/WorkspaceFormModal";
 import { ItemPickerModal } from "../components/ItemPickerModal";
-import type { Workspace, WorkspaceIconName, LauncherItem, ItemType } from "../types";
+import { ExecutionOverlay } from "../components/ExecutionOverlay";
+import type {
+  Workspace, WorkspaceIconName, LauncherItem, ItemType,
+  WorkspaceItemSettings,
+} from "../types";
+import { DEFAULT_ITEM_SETTINGS } from "../types";
 
 // ── Icon registry ─────────────────────────────────────────────────────────────
 
@@ -205,6 +212,70 @@ type DetailModal =
   | { type: "deleteWorkspace" }
   | null;
 
+// ── Per-item settings panel ───────────────────────────────────────────────────
+
+function SettingsToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 cursor-pointer">
+      <span className="text-[11px] text-lo">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`
+          relative w-8 h-4 rounded-full transition-colors duration-150 shrink-0
+          ${checked ? "bg-accent" : "bg-elevated border border-line"}
+        `}
+      >
+        <span
+          className={`
+            absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all duration-150
+            ${checked ? "left-[18px]" : "left-0.5"}
+          `}
+        />
+      </button>
+    </label>
+  );
+}
+
+interface ItemSettingsPanelProps {
+  settings: WorkspaceItemSettings;
+  onChange: (s: WorkspaceItemSettings) => void;
+}
+
+function ItemSettingsPanel({ settings, onChange }: ItemSettingsPanelProps) {
+  return (
+    <div className="mx-4 mb-2 mt-0.5 bg-elevated border border-line rounded-lg px-3 py-2.5 space-y-2">
+      <SettingsToggle
+        label="Auto-execute"
+        checked={settings.autoExecute}
+        onChange={(v) => onChange({ ...settings, autoExecute: v })}
+      />
+      <SettingsToggle
+        label="Confirm before launching"
+        checked={settings.confirmBefore}
+        onChange={(v) => onChange({ ...settings, confirmBefore: v })}
+      />
+      <SettingsToggle
+        label="Continue if fails"
+        checked={settings.continueOnFailure}
+        onChange={(v) => onChange({ ...settings, continueOnFailure: v })}
+      />
+    </div>
+  );
+}
+
+// ── Detail view ───────────────────────────────────────────────────────────────
+
 function WorkspaceDetail({
   workspace,
   allItems,
@@ -213,13 +284,16 @@ function WorkspaceDetail({
   onDelete,
 }: WorkspaceDetailProps) {
   const [modal, setModal] = useState<DetailModal>(null);
+  const [openSettingsId, setOpenSettingsId] = useState<string | null>(null);
+  const { state: execState, start, stop, dismiss, respondConfirm } =
+    useWorkspaceExecution();
+
+  const isExecuting =
+    execState?.status === "running" || execState?.status === "paused_confirm";
 
   // Resolve itemIds to items (null = deleted from Library)
-  const resolvedItems: { id: string; item: LauncherItem | null }[] =
-    workspace.itemIds.map((id) => ({
-      id,
-      item: allItems.find((i) => i.id === id) ?? null,
-    }));
+  const resolvedItems: (LauncherItem | null)[] =
+    workspace.itemIds.map((id) => allItems.find((i) => i.id === id) ?? null);
 
   function moveItem(index: number, dir: "up" | "down") {
     const ids = [...workspace.itemIds];
@@ -230,9 +304,11 @@ function WorkspaceDetail({
   }
 
   function removeItem(id: string) {
+    const { [id]: _removed, ...rest } = workspace.itemSettings ?? {};
     onUpdate({
       ...workspace,
       itemIds: workspace.itemIds.filter((i) => i !== id),
+      itemSettings: rest,
       updatedAt: new Date().toISOString(),
     });
   }
@@ -244,6 +320,22 @@ function WorkspaceDetail({
       updatedAt: new Date().toISOString(),
     });
   }
+
+  function updateItemSettings(id: string, settings: WorkspaceItemSettings) {
+    onUpdate({
+      ...workspace,
+      itemSettings: { ...(workspace.itemSettings ?? {}), [id]: settings },
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  function handleStart() {
+    if (isExecuting) return;
+    start(workspace, resolvedItems);
+  }
+
+  const resolvedForId = (id: string): LauncherItem | null =>
+    allItems.find((i) => i.id === id) ?? null;
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -288,6 +380,18 @@ function WorkspaceDetail({
 
             {/* Actions */}
             <div className="flex items-center gap-2 shrink-0">
+              {/* Start Workspace */}
+              <button
+                onClick={handleStart}
+                disabled={isExecuting || workspace.itemIds.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
+                style={{ background: workspace.color }}
+                title={workspace.itemIds.length === 0 ? "Add items first" : "Start Workspace"}
+              >
+                <Play size={11} strokeWidth={2.5} className="fill-current" />
+                Start
+              </button>
+
               <button
                 onClick={() => setModal({ type: "edit" })}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-card border border-line text-[12px] text-lo hover:text-hi hover:border-elevated transition-colors"
@@ -332,78 +436,130 @@ function WorkspaceDetail({
               </div>
             ) : (
               <div className="bg-card border border-line rounded-xl overflow-hidden">
-                {resolvedItems.map(({ id, item }, index) => (
-                  <div
-                    key={id}
-                    className={`
-                      flex items-center gap-3 px-4 py-3
-                      ${index < resolvedItems.length - 1 ? "border-b border-line" : ""}
-                    `}
-                  >
-                    {/* Reorder buttons */}
-                    <div className="flex flex-col gap-0.5 shrink-0">
-                      <button
-                        onClick={() => moveItem(index, "up")}
-                        disabled={index === 0}
-                        className="w-5 h-5 flex items-center justify-center text-dim hover:text-lo disabled:opacity-25 transition-colors rounded"
-                      >
-                        <ChevronUp size={12} strokeWidth={2} />
-                      </button>
-                      <button
-                        onClick={() => moveItem(index, "down")}
-                        disabled={index === resolvedItems.length - 1}
-                        className="w-5 h-5 flex items-center justify-center text-dim hover:text-lo disabled:opacity-25 transition-colors rounded"
-                      >
-                        <ChevronDown size={12} strokeWidth={2} />
-                      </button>
-                    </div>
+                {workspace.itemIds.map((id, index) => {
+                  const item = resolvedForId(id);
+                  const settings =
+                    workspace.itemSettings?.[id] ?? DEFAULT_ITEM_SETTINGS;
+                  const settingsOpen = openSettingsId === id;
 
-                    {item ? (
-                      <>
-                        {/* Item icon */}
-                        <div
-                          className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
-                          style={{ background: hexBg(item.color), color: item.color }}
-                        >
-                          {TYPE_ICONS[item.type]}
-                        </div>
-
-                        {/* Item info */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[13px] font-medium text-hi">{item.name}</span>
-                            <span className="text-[10px] px-1.5 py-[1px] rounded bg-elevated text-dim">
-                              {item.type}
-                            </span>
-                          </div>
-                          {item.description && (
-                            <p className="text-[11px] text-dim truncate mt-0.5">{item.description}</p>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        {/* Stale / deleted item */}
-                        <div className="w-7 h-7 rounded-md bg-elevated flex items-center justify-center shrink-0">
-                          <AlertTriangle size={12} className="text-dim" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-[12px] text-dim italic">Deleted Library item</span>
-                          <p className="text-[10px] text-dim/60 mt-0.5 font-mono">{id}</p>
-                        </div>
-                      </>
-                    )}
-
-                    {/* Remove */}
-                    <button
-                      onClick={() => removeItem(id)}
-                      className="w-6 h-6 flex items-center justify-center rounded-md text-dim hover:text-red-400 hover:bg-red-400/10 transition-colors shrink-0"
-                      title="Remove from workspace"
+                  return (
+                    <div
+                      key={id}
+                      className={index < workspace.itemIds.length - 1 ? "border-b border-line" : ""}
                     >
-                      <X size={12} strokeWidth={2} />
-                    </button>
-                  </div>
-                ))}
+                      {/* Main row */}
+                      <div className="flex items-center gap-3 px-4 py-3 group">
+                        {/* Reorder buttons */}
+                        <div className="flex flex-col gap-0.5 shrink-0">
+                          <button
+                            onClick={() => moveItem(index, "up")}
+                            disabled={index === 0}
+                            className="w-5 h-5 flex items-center justify-center text-dim hover:text-lo disabled:opacity-25 transition-colors rounded"
+                          >
+                            <ChevronUp size={12} strokeWidth={2} />
+                          </button>
+                          <button
+                            onClick={() => moveItem(index, "down")}
+                            disabled={index === workspace.itemIds.length - 1}
+                            className="w-5 h-5 flex items-center justify-center text-dim hover:text-lo disabled:opacity-25 transition-colors rounded"
+                          >
+                            <ChevronDown size={12} strokeWidth={2} />
+                          </button>
+                        </div>
+
+                        {item ? (
+                          <>
+                            {/* Item icon */}
+                            <div
+                              className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
+                              style={{
+                                background: hexBg(item.color),
+                                color: settings.autoExecute ? item.color : undefined,
+                                opacity: settings.autoExecute ? 1 : 0.4,
+                              }}
+                            >
+                              {TYPE_ICONS[item.type]}
+                            </div>
+
+                            {/* Item info */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`text-[13px] font-medium ${settings.autoExecute ? "text-hi" : "text-dim"}`}
+                                >
+                                  {item.name}
+                                </span>
+                                <span className="text-[10px] px-1.5 py-[1px] rounded bg-elevated text-dim">
+                                  {item.type}
+                                </span>
+                                {!settings.autoExecute && (
+                                  <span className="text-[10px] px-1.5 py-[1px] rounded bg-elevated text-dim italic">
+                                    skipped
+                                  </span>
+                                )}
+                                {settings.confirmBefore && settings.autoExecute && (
+                                  <span className="text-[10px] px-1.5 py-[1px] rounded bg-elevated text-dim">
+                                    confirm
+                                  </span>
+                                )}
+                              </div>
+                              {item.description && (
+                                <p className="text-[11px] text-dim truncate mt-0.5">
+                                  {item.description}
+                                </p>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="w-7 h-7 rounded-md bg-elevated flex items-center justify-center shrink-0">
+                              <AlertTriangle size={12} className="text-dim" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-[12px] text-dim italic">Deleted Library item</span>
+                              <p className="text-[10px] text-dim/60 mt-0.5 font-mono">{id}</p>
+                            </div>
+                          </>
+                        )}
+
+                        {/* Row actions */}
+                        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {item && (
+                            <button
+                              onClick={() =>
+                                setOpenSettingsId(settingsOpen ? null : id)
+                              }
+                              className={`
+                                w-6 h-6 flex items-center justify-center rounded-md transition-colors
+                                ${settingsOpen
+                                  ? "text-accent bg-accent/10"
+                                  : "text-dim hover:text-lo hover:bg-elevated"}
+                              `}
+                              title="Item settings"
+                            >
+                              <Settings2 size={12} strokeWidth={1.8} />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => removeItem(id)}
+                            className="w-6 h-6 flex items-center justify-center rounded-md text-dim hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                            title="Remove from workspace"
+                          >
+                            <X size={12} strokeWidth={2} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Settings panel */}
+                      {settingsOpen && item && (
+                        <ItemSettingsPanel
+                          settings={settings}
+                          onChange={(s) => updateItemSettings(id, s)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -437,6 +593,17 @@ function WorkspaceDetail({
           onCancel={() => setModal(null)}
         />
       )}
+
+      {/* Execution overlay */}
+      {execState && (
+        <ExecutionOverlay
+          state={execState}
+          resolvedItems={resolvedItems}
+          onStop={stop}
+          onDismiss={dismiss}
+          onConfirm={respondConfirm}
+        />
+      )}
     </div>
   );
 }
@@ -450,6 +617,7 @@ interface WorkspaceListProps {
   onNew: () => void;
   onEdit: (ws: Workspace) => void;
   onDelete: (ws: Workspace) => void;
+  onReorder: (reordered: Workspace[]) => void;
 }
 
 function WorkspaceList({
@@ -459,12 +627,41 @@ function WorkspaceList({
   onNew,
   onEdit,
   onDelete,
+  onReorder,
 }: WorkspaceListProps) {
+  const [dragId, setDragId]     = useState<string | null>(null);
+  const [dragOverId, setOverId] = useState<string | null>(null);
+
   function previewItems(ws: Workspace): (LauncherItem | null)[] {
     return ws.itemIds.slice(0, 4).map(
       (id) => allItems.find((i) => i.id === id) ?? null
     );
   }
+
+  function handleDragStart(e: React.DragEvent, id: string) {
+    setDragId(id);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(e: React.DragEvent, id: string) {
+    e.preventDefault();
+    if (id !== dragId) setOverId(id);
+  }
+
+  function handleDrop(e: React.DragEvent, targetId: string) {
+    e.preventDefault();
+    if (!dragId || dragId === targetId) { reset(); return; }
+    const from = workspaces.findIndex((w) => w.id === dragId);
+    const to   = workspaces.findIndex((w) => w.id === targetId);
+    if (from === -1 || to === -1) { reset(); return; }
+    const next = [...workspaces];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    onReorder(next);
+    reset();
+  }
+
+  function reset() { setDragId(null); setOverId(null); }
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -503,16 +700,35 @@ function WorkspaceList({
           </div>
         ) : (
           <div className="max-w-2xl mx-auto px-6 py-6">
+            {workspaces.length > 1 && (
+              <p className="text-[11px] text-dim mb-3 flex items-center gap-1.5">
+                <GripVertical size={12} strokeWidth={1.5} />
+                Drag cards to reorder
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-3">
               {workspaces.map((ws) => (
-                <WorkspaceCard
+                <div
                   key={ws.id}
-                  workspace={ws}
-                  previewItems={previewItems(ws)}
-                  onClick={() => onSelect(ws.id)}
-                  onEdit={() => onEdit(ws)}
-                  onDelete={() => onDelete(ws)}
-                />
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, ws.id)}
+                  onDragOver={(e) => handleDragOver(e, ws.id)}
+                  onDrop={(e) => handleDrop(e, ws.id)}
+                  onDragEnd={reset}
+                  className={`
+                    rounded-xl transition-all duration-100
+                    ${dragId === ws.id ? "opacity-40 scale-[0.98]" : ""}
+                    ${dragOverId === ws.id ? "ring-2 ring-accent/40" : ""}
+                  `}
+                >
+                  <WorkspaceCard
+                    workspace={ws}
+                    previewItems={previewItems(ws)}
+                    onClick={() => onSelect(ws.id)}
+                    onEdit={() => onEdit(ws)}
+                    onDelete={() => onDelete(ws)}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -531,7 +747,7 @@ type PageModal =
   | null;
 
 export function Workspaces() {
-  const { workspaces, loading, error, addWorkspace, updateWorkspace, deleteWorkspace } =
+  const { workspaces, loading, error, addWorkspace, updateWorkspace, deleteWorkspace, reorderWorkspaces } =
     useWorkspaces();
   const { items } = useLauncher();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -586,6 +802,7 @@ export function Workspaces() {
         onNew={() => setModal({ type: "new" })}
         onEdit={(ws) => setModal({ type: "edit", workspace: ws })}
         onDelete={(ws) => setModal({ type: "delete", workspace: ws })}
+        onReorder={reorderWorkspaces}
       />
 
       {modal?.type === "new" && (

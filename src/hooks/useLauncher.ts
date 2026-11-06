@@ -36,5 +36,11 @@ export function useLauncher() {
     [items, persist]
   );
 
-  return { items, loading, error, addItem, updateItem, deleteItem };
+  const toggleFavorite = useCallback(
+    (id: string) =>
+      persist(items.map((i) => (i.id === id ? { ...i, favorite: !i.favorite } : i))),
+    [items, persist]
+  );
+
+  return { items, loading, error, addItem, updateItem, deleteItem, toggleFavorite };
 }

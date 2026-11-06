@@ -35,5 +35,10 @@ export function useWorkspaces() {
     [workspaces, persist]
   );
 
-  return { workspaces, loading, error, addWorkspace, updateWorkspace, deleteWorkspace };
+  const reorderWorkspaces = useCallback(
+    (reordered: Workspace[]) => persist(reordered),
+    [persist]
+  );
+
+  return { workspaces, loading, error, addWorkspace, updateWorkspace, deleteWorkspace, reorderWorkspaces };
 }
