@@ -86,6 +86,14 @@ export function useWorkspaceExecution() {
         currentIndex: -1,
       });
 
+      // Record this workspace as recently used so Activity and the palette
+      // recents list stay up to date regardless of where Start was clicked.
+      invoke("record_recent", {
+        id: workspace.id,
+        kind: "workspace",
+        usedAt: new Date().toISOString(),
+      }).catch(() => {});
+
       let anyFailed = false;
 
       // ── Phase 1: batch all batchable website items ─────────────────────────
