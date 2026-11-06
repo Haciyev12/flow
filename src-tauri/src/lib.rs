@@ -153,6 +153,74 @@ fn launch_item(item_type: String, target: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── Browser window launcher ───────────────────────────────────────────────────
+//
+// Opens a group of URLs in a *new* Brave Browser window rather than reusing an
+// existing one. Uses Brave's binary directly so Chromium's single-instance
+// mechanism forwards "--new-window url..." to the running instance (or launches
+// Brave fresh if it is not running). This never touches existing windows or tabs.
+
+fn find_brave_binary() -> Result<std::path::PathBuf, String> {
+    // Standard direct-download and Homebrew Cask install path.
+    let standard = std::path::Path::new(
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    );
+    if standard.exists() {
+        return Ok(standard.to_path_buf());
+    }
+
+    // User-level Applications folder (less common but valid on macOS).
+    if let Ok(home) = std::env::var("HOME") {
+        let user = std::path::PathBuf::from(home)
+            .join("Applications/Brave Browser.app/Contents/MacOS/Brave Browser");
+        if user.exists() {
+            return Ok(user);
+        }
+    }
+
+    Err("Brave Browser not found at /Applications/Brave Browser.app. \
+         Install it from https://brave.com or move it to /Applications."
+        .into())
+}
+
+/// Opens every URL in `urls` as a tab inside a **single new** Brave window.
+///
+/// When Brave is already running, Chromium's single-instance mechanism
+/// forwards the arguments to the live process, which opens the new window
+/// without disturbing any existing windows or tabs.
+///
+/// When Brave is not running, it launches and the new window is the first one.
+///
+/// All URLs must be http or https; other schemes are rejected.
+#[tauri::command]
+fn open_urls_in_browser_window(urls: Vec<String>) -> Result<(), String> {
+    if urls.is_empty() {
+        return Ok(());
+    }
+    for url in &urls {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(format!(
+                "\"{}\" is not a valid URL. Only http:// and https:// are supported.",
+                url
+            ));
+        }
+    }
+
+    let binary = find_brave_binary()?;
+
+    // The first URL goes after --new-window; additional URLs become extra tabs
+    // in that same new window (standard Chromium behaviour).
+    let mut cmd = std::process::Command::new(&binary);
+    cmd.arg("--new-window");
+    for url in &urls {
+        cmd.arg(url.as_str());
+    }
+    cmd.spawn()
+        .map_err(|e| format!("Could not launch Brave Browser: {}", e))?;
+
+    Ok(())
+}
+
 // ── Command palette window ────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -556,6 +624,7 @@ pub fn run() {
             clear_all_data,
             get_palette_shortcut,
             set_palette_shortcut,
+            open_urls_in_browser_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

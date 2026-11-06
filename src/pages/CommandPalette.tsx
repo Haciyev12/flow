@@ -306,11 +306,31 @@ export function CommandPalette() {
         await invoke("launch_item", { itemType: entry.itemType, target: entry.target });
       } else if (entry.kind === "workspace" && entry.workspace) {
         const ws = entry.workspace;
+
+        // Collect website URLs for the browser batch, non-websites for
+        // individual launch. Mirrors the logic in useWorkspaceExecution.
+        const websiteUrls: string[] = [];
+        const otherItems: LauncherItem[] = [];
+
         for (const id of ws.itemIds) {
           const settings = ws.itemSettings?.[id] ?? DEFAULT_ITEM_SETTINGS;
           if (!settings.autoExecute) continue;
           const item = items.find((i) => i.id === id);
           if (!item) continue;
+          if (item.type === "website" && !settings.confirmBefore) {
+            websiteUrls.push(item.target);
+          } else {
+            otherItems.push(item);
+          }
+        }
+
+        // Open all websites in one new Brave window.
+        if (websiteUrls.length > 0) {
+          await invoke("open_urls_in_browser_window", { urls: websiteUrls }).catch(() => {});
+        }
+
+        // Launch non-website items individually.
+        for (const item of otherItems) {
           await invoke("launch_item", { itemType: item.type, target: item.target }).catch(() => {});
         }
       }

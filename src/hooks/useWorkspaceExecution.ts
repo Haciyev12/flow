@@ -25,6 +25,23 @@ function applyItemStatus(
   };
 }
 
+function applyBatchStatus(
+  state: WorkspaceExecutionState,
+  ids: string[],
+  status: ExecutionItemStatus,
+  error?: string
+): WorkspaceExecutionState {
+  const idSet = new Set(ids);
+  return {
+    ...state,
+    // Keep currentIndex at -1 during batch; individual spinners show progress.
+    currentIndex: -1,
+    items: state.items.map((it) =>
+      idSet.has(it.id) ? { ...it, status, error } : it
+    ),
+  };
+}
+
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -34,7 +51,6 @@ export function useWorkspaceExecution() {
   const cancelledRef = useRef(false);
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null);
 
-  // Called from the overlay when user answers a confirm prompt.
   const respondConfirm = useCallback((confirmed: boolean) => {
     confirmResolveRef.current?.(confirmed);
     confirmResolveRef.current = null;
@@ -42,7 +58,6 @@ export function useWorkspaceExecution() {
 
   const stop = useCallback(() => {
     cancelledRef.current = true;
-    // Unblock any pending confirm so the loop can exit cleanly.
     confirmResolveRef.current?.(false);
     confirmResolveRef.current = null;
     setState((s) => (s ? { ...s, status: "cancelled" } : null));
@@ -61,7 +76,7 @@ export function useWorkspaceExecution() {
         status: "pending",
       }));
 
-      const initial: WorkspaceExecutionState = {
+      setState({
         workspaceId: workspace.id,
         workspaceName: workspace.name,
         workspaceColor: workspace.color,
@@ -69,19 +84,81 @@ export function useWorkspaceExecution() {
         status: "running",
         items: execItems,
         currentIndex: -1,
-      };
-      setState(initial);
+      });
 
       let anyFailed = false;
+
+      // ── Phase 1: batch all batchable website items ─────────────────────────
+      //
+      // Website items that have autoExecute=true and confirmBefore=false are
+      // grouped and opened together in one new Brave window. This guarantees a
+      // single clean window per workspace rather than reusing the existing one.
+      //
+      // Items with confirmBefore=true fall through to the per-item loop below
+      // so the user can approve or skip them individually.
+
+      const batchIds: string[] = [];
+      const batchUrls: string[] = [];
+
+      for (let i = 0; i < workspace.itemIds.length; i++) {
+        const id = workspace.itemIds[i];
+        const item = resolvedItems[i] ?? null;
+        const settings = workspace.itemSettings?.[id] ?? DEFAULT_ITEM_SETTINGS;
+
+        if (
+          item?.type === "website" &&
+          settings.autoExecute &&
+          !settings.confirmBefore
+        ) {
+          batchIds.push(id);
+          batchUrls.push(item.target);
+        }
+      }
+
+      if (batchIds.length > 0) {
+        // Show all website items as running simultaneously.
+        setState((s) => (s ? applyBatchStatus(s, batchIds, "running") : null));
+
+        try {
+          await invoke("open_urls_in_browser_window", { urls: batchUrls });
+          setState((s) =>
+            s ? applyBatchStatus(s, batchIds, "success") : null
+          );
+        } catch (err) {
+          anyFailed = true;
+          setState((s) =>
+            s ? applyBatchStatus(s, batchIds, "failed", String(err)) : null
+          );
+          // Check whether the first non-batched item can continue on failure.
+          // We honour the first website item's continueOnFailure setting for
+          // the batch as a whole.
+          const firstBatchId = batchIds[0];
+          const firstSettings =
+            workspace.itemSettings?.[firstBatchId] ?? DEFAULT_ITEM_SETTINGS;
+          if (!firstSettings.continueOnFailure) {
+            setState((s) =>
+              s ? { ...s, status: "failed", currentIndex: -1 } : null
+            );
+            return;
+          }
+        }
+
+        await wait(400);
+      }
+
+      // ── Phase 2: execute every non-batched item in original order ──────────
+
+      const batchedSet = new Set(batchIds);
 
       for (let i = 0; i < workspace.itemIds.length; i++) {
         if (cancelledRef.current) break;
 
         const id = workspace.itemIds[i];
+        if (batchedSet.has(id)) continue; // already handled above
+
         const item = resolvedItems[i] ?? null;
         const settings = workspace.itemSettings?.[id] ?? DEFAULT_ITEM_SETTINGS;
 
-        // Skip items opted out of auto-execute
         if (!settings.autoExecute) {
           setState((s) =>
             s ? applyItemStatus(s, id, "skipped", i) : null
@@ -89,22 +166,17 @@ export function useWorkspaceExecution() {
           continue;
         }
 
-        // Skip items deleted from the Library
         if (!item) {
           setState((s) =>
-            s
-              ? applyItemStatus(s, id, "skipped", i, "No longer in Library")
-              : null
+            s ? applyItemStatus(s, id, "skipped", i, "No longer in Library") : null
           );
           continue;
         }
 
-        // Mark as running
-        setState((s) =>
-          s ? applyItemStatus(s, id, "running", i) : null
-        );
+        setState((s) => (s ? applyItemStatus(s, id, "running", i) : null));
 
-        // Confirmation gate
+        // Confirmation gate (applies to all item types including websites with
+        // confirmBefore=true that were excluded from the batch).
         if (settings.confirmBefore) {
           const confirmed = await new Promise<boolean>((resolve) => {
             confirmResolveRef.current = resolve;
@@ -123,15 +195,15 @@ export function useWorkspaceExecution() {
           }
         }
 
-        // Execute
+        // For websites reaching here they have confirmBefore=true (and the user
+        // confirmed) — open them individually via the standard launcher so the
+        // user gets exactly the behaviour they explicitly confirmed.
         try {
           await invoke("launch_item", {
             itemType: item.type,
             target: item.target,
           });
-          setState((s) =>
-            s ? applyItemStatus(s, id, "success", i) : null
-          );
+          setState((s) => (s ? applyItemStatus(s, id, "success", i) : null));
           await wait(600);
         } catch (err) {
           anyFailed = true;
