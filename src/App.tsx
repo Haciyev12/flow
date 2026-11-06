@@ -3,21 +3,21 @@ import { AppLayout } from "./layout/AppLayout";
 import { Overview } from "./pages/Overview";
 import { Launcher } from "./pages/Launcher";
 import { Workspaces } from "./pages/Workspaces";
-import { Placeholder } from "./pages/Placeholder";
-
-const PLACEHOLDER_TITLES: Record<string, string> = {
-  activity: "Activity",
-  settings: "Settings",
-};
+import { Activity } from "./pages/Activity";
+import { Settings } from "./pages/Settings";
 
 function App() {
   const [activePage, setActivePage] = useState("overview");
 
   function renderPage() {
-    if (activePage === "overview") return <Overview />;
-    if (activePage === "launcher") return <Launcher />;
-    if (activePage === "workspaces") return <Workspaces />;
-    return <Placeholder title={PLACEHOLDER_TITLES[activePage] ?? activePage} />;
+    switch (activePage) {
+      case "overview":   return <Overview />;
+      case "launcher":   return <Launcher />;
+      case "workspaces": return <Workspaces />;
+      case "activity":   return <Activity />;
+      case "settings":   return <Settings />;
+      default:           return <Overview />;
+    }
   }
 
   return (

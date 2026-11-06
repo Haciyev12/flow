@@ -436,6 +436,19 @@ fn import_config(
     })
 }
 
+/// Deletes all stored data files, resetting Flow to a clean state.
+#[tauri::command]
+fn clear_all_data(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    for name in &["items.json", "workspaces.json", "recents.json"] {
+        let p = dir.join(name);
+        if p.exists() {
+            std::fs::remove_file(&p).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 // ── App entry ─────────────────────────────────────────────────────────────────
 
 fn toggle_palette(app: &tauri::AppHandle) {
@@ -488,6 +501,7 @@ pub fn run() {
             record_recent,
             export_config,
             import_config,
+            clear_all_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
