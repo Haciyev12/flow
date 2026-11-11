@@ -96,8 +96,34 @@ export interface Workspace {
   itemSettings?: Record<string, WorkspaceItemSettings>;
   /** How websites are opened when this workspace is launched. Defaults to 'new-window'. */
   browserOpenMode?: 'new-window' | 'active-session';
+  /** Optional: share a link after this workspace starts. */
+  shareAction?: WorkspaceShareAction;
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Share destinations ────────────────────────────────────────────────────────
+
+export type DestinationKind = 'whatsapp-contact' | 'whatsapp-group' | 'copy';
+
+export interface ShareDestination {
+  id: string;
+  /** Display name, e.g. "Study Group", "John (WhatsApp)" */
+  name: string;
+  kind: DestinationKind;
+  /** Phone number (contact) or invite URL (group). Absent for 'copy'. */
+  target?: string;
+  color: string;
+  createdAt: string;
+}
+
+export interface WorkspaceShareAction {
+  /** Extensible: 'google-meet-new' for now; Zoom etc. added later. */
+  actionType: 'google-meet-new';
+  /** IDs of destinations to show. Empty = show all saved destinations. */
+  destinationIds: string[];
+  /** Template with {link} and {workspace} variables. */
+  messageTemplate: string;
 }
 
 // ── Execution engine ──────────────────────────────────────────────────────────

@@ -4,8 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Search, AppWindow, FolderOpen, FileText, Folder, Globe, Layers,
   Code2, BookOpen, Zap, Target, Briefcase, Star, Coffee, Music,
-  Heart, Terminal, ArrowRight,
+  Heart, Terminal, ArrowRight, Video,
 } from "lucide-react";
+import { emit } from "@tauri-apps/api/event";
 import type { LauncherItem, Workspace, WorkspaceIconName, ItemType } from "../types";
 import { DEFAULT_ITEM_SETTINGS } from "../types";
 
@@ -19,10 +20,10 @@ interface RecentEntry {
 
 interface PaletteEntry {
   id: string;
-  kind: "item" | "workspace";
+  kind: "item" | "workspace" | "share";
   name: string;
   subtitle: string;
-  itemType: ItemType | "workspace";
+  itemType: ItemType | "workspace" | "share";
   color: string;
   target?: string;
   itemIds?: string[];
@@ -55,13 +56,14 @@ const WS_ICONS: Record<WorkspaceIconName, React.ReactNode> = {
   "terminal":  <Terminal  size={15} strokeWidth={1.8} />,
 };
 
-const ACTION_LABEL: Record<ItemType | "workspace", string> = {
+const ACTION_LABEL: Record<ItemType | "workspace" | "share", string> = {
   app:       "Launch",
   project:   "Open",
   file:      "Open",
   folder:    "Finder",
   website:   "Browse",
   workspace: "Start",
+  share:     "Create",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -102,10 +104,12 @@ interface RowProps {
 function ResultRow({ entry, selected, isRecent, isFavorite, onPointerEnter, onClick }: RowProps) {
   const icon = entry.kind === "workspace"
     ? WS_ICONS[entry.wsIcon ?? "layers"]
+    : entry.kind === "share"
+    ? <Video size={12} strokeWidth={1.8} />
     : ITEM_ICONS[entry.itemType as ItemType];
 
-  const badge = entry.kind === "workspace" ? "workspace" : entry.itemType;
-  const action = ACTION_LABEL[entry.itemType];
+  const badge = entry.kind === "workspace" ? "workspace" : entry.kind === "share" ? "share" : entry.itemType;
+  const action = entry.kind === "share" ? "Create" : ACTION_LABEL[entry.itemType as ItemType | "workspace"];
 
   return (
     <div
@@ -233,7 +237,16 @@ export function CommandPalette() {
       workspace: ws,
     }));
 
-    return [...itemEntries, ...wsEntries];
+    const meetEntry: PaletteEntry = {
+      id: "__meet_new__",
+      kind: "share",
+      name: "Create Meet link",
+      subtitle: "Open meet.new and pick where to share it",
+      itemType: "share",
+      color: "#6366F1",
+    };
+
+    return [...itemEntries, ...wsEntries, meetEntry];
   }, [items, workspaces]);
 
   // ── Filter + rank ───────────────────────────────────────────────────────────
@@ -302,7 +315,13 @@ export function CommandPalette() {
     if (busy) return;
     setBusy(true);
     try {
-      if (entry.kind === "item" && entry.target) {
+      if (entry.kind === "share") {
+        await invoke("open_meet_new").catch(() => {});
+        await invoke("hide_palette");
+        // Open main window and show share picker there
+        await emit("show-share-picker", null);
+        return;
+      } else if (entry.kind === "item" && entry.target) {
         await invoke("launch_item", { itemType: entry.itemType, target: entry.target });
       } else if (entry.kind === "workspace" && entry.workspace) {
         const ws = entry.workspace;

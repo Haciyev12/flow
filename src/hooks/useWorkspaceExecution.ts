@@ -4,6 +4,7 @@ import type {
   Workspace,
   LauncherItem,
   WorkspaceExecutionState,
+  WorkspaceShareAction,
   ItemExecutionState,
   ExecutionItemStatus,
 } from "../types";
@@ -48,6 +49,7 @@ function wait(ms: number) {
 
 export function useWorkspaceExecution() {
   const [state, setState] = useState<WorkspaceExecutionState | null>(null);
+  const [pendingShare, setPendingShare] = useState<WorkspaceShareAction | null>(null);
   const cancelledRef = useRef(false);
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null);
 
@@ -231,10 +233,16 @@ export function useWorkspaceExecution() {
             ? { ...s, status: anyFailed ? "failed" : "completed", currentIndex: -1 }
             : null
         );
+        // Surface the share action so the UI can show the picker after dismissal
+        if (!anyFailed && workspace.shareAction) {
+          setPendingShare(workspace.shareAction);
+        }
       }
     },
     []
   );
 
-  return { state, start, stop, dismiss, respondConfirm };
+  const dismissShare = useCallback(() => setPendingShare(null), []);
+
+  return { state, start, stop, dismiss, respondConfirm, pendingShare, dismissShare };
 }

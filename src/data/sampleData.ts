@@ -8,14 +8,16 @@ import {
   BookOpen,
   Zap,
   Play,
+  Share2,
 } from "lucide-react";
 import type { NavItem, QuickAction, Project, ActivityEntry } from "../types";
 
 export const navItems: NavItem[] = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard },
-  { id: "launcher", label: "Launcher", icon: FolderOpen },
-  { id: "workspaces", label: "Workspaces", icon: Layers },
-  { id: "activity", label: "Activity", icon: Activity },
+  { id: "overview",     label: "Overview",     icon: LayoutDashboard },
+  { id: "launcher",     label: "Launcher",     icon: FolderOpen },
+  { id: "workspaces",   label: "Workspaces",   icon: Layers },
+  { id: "share",        label: "Share",        icon: Share2 },
+  { id: "activity",     label: "Activity",     icon: Activity },
 ];
 
 export const settingsNavItem: NavItem = {

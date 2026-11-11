@@ -4,17 +4,19 @@ import {
   X, AppWindow, FolderOpen, FileText, Folder, Globe,
   Code2, BookOpen, Zap, Target, Briefcase, Star,
   Coffee, Music, Heart, Terminal, Layers, AlertTriangle,
-  Play, Settings2, GripVertical,
+  Play, Settings2, GripVertical, Share2,
 } from "lucide-react";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { useLauncher } from "../hooks/useLauncher";
 import { useWorkspaceExecution } from "../hooks/useWorkspaceExecution";
+import { useDestinations } from "../hooks/useDestinations";
 import { WorkspaceFormModal } from "../components/WorkspaceFormModal";
 import { ItemPickerModal } from "../components/ItemPickerModal";
 import { ExecutionOverlay } from "../components/ExecutionOverlay";
+import { SharePicker } from "../components/SharePicker";
 import type {
   Workspace, WorkspaceIconName, LauncherItem, ItemType,
-  WorkspaceItemSettings,
+  WorkspaceItemSettings, WorkspaceShareAction,
 } from "../types";
 import { DEFAULT_ITEM_SETTINGS } from "../types";
 
@@ -290,8 +292,9 @@ function WorkspaceDetail({
 }: WorkspaceDetailProps) {
   const [modal, setModal] = useState<DetailModal>(null);
   const [openSettingsId, setOpenSettingsId] = useState<string | null>(null);
-  const { state: execState, start, stop, dismiss, respondConfirm } =
+  const { state: execState, start, stop, dismiss, respondConfirm, pendingShare, dismissShare } =
     useWorkspaceExecution();
+  const { destinations } = useDestinations();
 
   const isExecuting =
     execState?.status === "running" || execState?.status === "paused_confirm";
@@ -429,6 +432,62 @@ function WorkspaceDetail({
               checked={workspace.browserOpenMode !== 'active-session'}
               onChange={(v) => updateBrowserMode(v ? 'new-window' : 'active-session')}
             />
+          </div>
+
+          {/* Share action */}
+          <div className="bg-card border border-line rounded-xl px-4 py-3">
+            <p className="text-[11px] font-semibold text-dim uppercase tracking-widest mb-3">
+              Share Action
+            </p>
+            <SettingsToggle
+              label="Create a Meet link when this workspace starts"
+              description="After the workspace launches, Flow opens meet.new and shows a share picker so you can send the link to a destination."
+              checked={!!workspace.shareAction}
+              onChange={(v) => {
+                const next: Workspace = {
+                  ...workspace,
+                  shareAction: v
+                    ? { actionType: 'google-meet-new', destinationIds: [], messageTemplate: "Join my {workspace} session: {link}" }
+                    : undefined,
+                  updatedAt: new Date().toISOString(),
+                };
+                onUpdate(next);
+              }}
+            />
+            {workspace.shareAction && (
+              <div className="mt-3 pt-3 border-t border-line space-y-2.5">
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-medium text-dim">
+                    Message template
+                    <span className="text-dim/60 normal-case font-normal ml-1">
+                      — use {"{link}"} and {"{workspace}"}
+                    </span>
+                  </label>
+                  <input
+                    className="w-full bg-hover border border-line rounded-lg px-3 py-1.5 text-[12px] text-hi placeholder:text-dim outline-none focus:border-accent transition-colors"
+                    value={workspace.shareAction.messageTemplate}
+                    placeholder="Join my {workspace} session: {link}"
+                    onChange={(e) => {
+                      const sa: WorkspaceShareAction = { ...workspace.shareAction!, messageTemplate: e.target.value };
+                      onUpdate({ ...workspace, shareAction: sa, updatedAt: new Date().toISOString() });
+                    }}
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] text-dim">
+                  <Share2 size={11} strokeWidth={1.8} />
+                  Destinations are managed in the{" "}
+                  <button
+                    className="text-accent hover:opacity-80 transition-opacity"
+                    onClick={() => {
+                      // Emit navigate event to go to the Share page
+                      document.dispatchEvent(new CustomEvent("flow-navigate", { detail: "share" }));
+                    }}
+                  >
+                    Share page
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Items section */}
@@ -624,6 +683,16 @@ function WorkspaceDetail({
           onStop={stop}
           onDismiss={dismiss}
           onConfirm={respondConfirm}
+        />
+      )}
+
+      {/* Share picker — appears after execution is dismissed if workspace has a shareAction */}
+      {!execState && pendingShare && (
+        <SharePicker
+          shareAction={pendingShare}
+          workspaceName={workspace.name}
+          destinations={destinations}
+          onDismiss={dismissShare}
         />
       )}
     </div>

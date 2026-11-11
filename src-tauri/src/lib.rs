@@ -102,8 +102,32 @@ struct Workspace {
     item_settings: HashMap<String, WorkspaceItemSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     browser_open_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_action: Option<WorkspaceShareAction>,
     created_at: String,
     updated_at: String,
+}
+
+// ── Share destinations model ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShareDestination {
+    id: String,
+    name: String,
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    color: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceShareAction {
+    action_type: String,
+    destination_ids: Vec<String>,
+    message_template: String,
 }
 
 // ── Recents model ─────────────────────────────────────────────────────────────
@@ -412,10 +436,21 @@ fn export_config(app: tauri::AppHandle) -> Result<String, String> {
         }
     };
 
+    let destinations: serde_json::Value = {
+        let p = dir.join("destinations.json");
+        if p.exists() {
+            serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?
+        } else {
+            serde_json::Value::Array(vec![])
+        }
+    };
+
     serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "items": items,
         "workspaces": workspaces,
+        "destinations": destinations,
     }))
     .map_err(|e| e.to_string())
 }
@@ -453,6 +488,13 @@ fn import_config(
             .unwrap_or(serde_json::Value::Array(vec![])),
     )
     .map_err(|e| format!("Invalid workspaces data: {}", e))?;
+
+    let new_destinations: Vec<ShareDestination> = serde_json::from_value(
+        json.get("destinations")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![])),
+    )
+    .map_err(|e| format!("Invalid destinations data: {}", e))?;
 
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -517,6 +559,36 @@ fn import_config(
     )
     .map_err(|e| e.to_string())?;
 
+    // Merge/replace destinations
+    let final_destinations = if merge {
+        let mut existing: Vec<ShareDestination> = {
+            let p = dir.join("destinations.json");
+            if p.exists() {
+                serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| e.to_string())?)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            }
+        };
+        let existing_ids: std::collections::HashSet<String> =
+            existing.iter().map(|d| d.id.clone()).collect();
+        let added: Vec<ShareDestination> = new_destinations
+            .into_iter()
+            .filter(|d| !existing_ids.contains(&d.id))
+            .collect();
+        existing.extend(added);
+        existing
+    } else {
+        new_destinations
+    };
+    if !final_destinations.is_empty() {
+        std::fs::write(
+            dir.join("destinations.json"),
+            serde_json::to_string_pretty(&final_destinations).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
     refresh_tray_menu(&app);
     Ok(ImportResult {
         items_added,
@@ -527,7 +599,7 @@ fn import_config(
 #[tauri::command]
 fn clear_all_data(app: tauri::AppHandle) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    for name in &["items.json", "workspaces.json", "recents.json"] {
+    for name in &["items.json", "workspaces.json", "recents.json", "destinations.json"] {
         let p = dir.join(name);
         if p.exists() {
             std::fs::remove_file(&p).map_err(|e| e.to_string())?;
@@ -535,6 +607,189 @@ fn clear_all_data(app: tauri::AppHandle) -> Result<(), String> {
     }
     refresh_tray_menu(&app);
     Ok(())
+}
+
+// ── Share destinations commands ───────────────────────────────────────────────
+
+#[tauri::command]
+fn load_destinations(app: tauri::AppHandle) -> Result<Vec<ShareDestination>, String> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("destinations.json");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_destinations(
+    app: tauri::AppHandle,
+    destinations: Vec<ShareDestination>,
+) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let content = serde_json::to_string_pretty(&destinations).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("destinations.json"), content).map_err(|e| e.to_string())
+}
+
+fn normalize_phone(phone: &str) -> Result<String, String> {
+    let digits: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() < 7 || digits.len() > 15 {
+        return Err(format!(
+            "Phone number must be 7–15 digits (got {}). Include the country code, e.g. 15551234567.",
+            digits.len()
+        ));
+    }
+    Ok(digits)
+}
+
+fn validate_whatsapp_group_url(url: &str) -> Result<(), String> {
+    if url.starts_with("https://chat.whatsapp.com/") {
+        Ok(())
+    } else {
+        Err("WhatsApp group links must start with https://chat.whatsapp.com/".into())
+    }
+}
+
+#[tauri::command]
+fn validate_destination(kind: String, target: String) -> Result<String, String> {
+    match kind.as_str() {
+        "whatsapp-contact" => normalize_phone(&target),
+        "whatsapp-group" => {
+            validate_whatsapp_group_url(&target)?;
+            Ok(target)
+        }
+        "copy" => Ok(String::new()),
+        other => Err(format!("Unknown destination kind: \"{}\".", other)),
+    }
+}
+
+fn render_template(template: &str, link: &str, workspace_name: &str) -> String {
+    template
+        .replace("{link}", link)
+        .replace("{workspace}", workspace_name)
+}
+
+#[tauri::command]
+fn open_meet_new() -> Result<(), String> {
+    do_open_url("https://meet.new")
+}
+
+#[tauri::command]
+fn execute_share(
+    destination_id: String,
+    message: String,
+    destinations: Vec<ShareDestination>,
+) -> Result<(), String> {
+    let dest = destinations
+        .iter()
+        .find(|d| d.id == destination_id)
+        .ok_or_else(|| format!("Destination \"{}\" not found.", destination_id))?;
+
+    match dest.kind.as_str() {
+        "whatsapp-contact" => {
+            let phone = dest
+                .target
+                .as_deref()
+                .ok_or("WhatsApp contact has no phone number.")?;
+            let normalized = normalize_phone(phone)?;
+            let encoded = url_encode(&message);
+            let url = format!("https://wa.me/{}?text={}", normalized, encoded);
+            do_open_url(&url)
+        }
+        "whatsapp-group" => {
+            let invite_url = dest
+                .target
+                .as_deref()
+                .ok_or("WhatsApp group has no invite URL.")?;
+            validate_whatsapp_group_url(invite_url)?;
+            write_to_clipboard(&message)?;
+            do_open_url(invite_url)
+        }
+        "copy" => write_to_clipboard(&message),
+        other => Err(format!("Unknown destination kind: \"{}\".", other)),
+    }
+}
+
+fn url_encode(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len() * 3);
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~' => encoded.push(byte as char),
+            b' ' => encoded.push('+'),
+            b => encoded.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    encoded
+}
+
+fn write_to_clipboard(text: &str) -> Result<(), String> {
+    std::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.as_mut().unwrap().write_all(text.as_bytes())?;
+            child.wait()?;
+            Ok(())
+        })
+        .map_err(|e| format!("Could not write to clipboard: {}", e))
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_phone_bare_digits() {
+        assert_eq!(normalize_phone("15551234567").unwrap(), "15551234567");
+    }
+
+    #[test]
+    fn normalize_phone_strips_formatting() {
+        assert_eq!(normalize_phone("+1 (555) 123-4567").unwrap(), "15551234567");
+    }
+
+    #[test]
+    fn normalize_phone_too_short() {
+        assert!(normalize_phone("123").is_err());
+    }
+
+    #[test]
+    fn normalize_phone_letters() {
+        assert!(normalize_phone("abc-def-ghij").is_err());
+    }
+
+    #[test]
+    fn validate_whatsapp_group_valid() {
+        assert!(validate_whatsapp_group_url("https://chat.whatsapp.com/ABC123xyz").is_ok());
+    }
+
+    #[test]
+    fn validate_whatsapp_group_invalid() {
+        assert!(validate_whatsapp_group_url("https://t.me/mygroup").is_err());
+        assert!(validate_whatsapp_group_url("https://wa.me/15551234567").is_err());
+    }
+
+    #[test]
+    fn render_template_substitutes_variables() {
+        let result = render_template(
+            "Join my {workspace} session: {link}",
+            "https://meet.google.com/abc-defg-hij",
+            "Study Mode",
+        );
+        assert_eq!(
+            result,
+            "Join my Study Mode session: https://meet.google.com/abc-defg-hij"
+        );
+    }
 }
 
 // ── Settings commands ─────────────────────────────────────────────────────────
@@ -1015,6 +1270,11 @@ pub fn run() {
             get_settings,
             save_app_settings,
             open_urls_in_browser_window,
+            load_destinations,
+            save_destinations,
+            validate_destination,
+            open_meet_new,
+            execute_share,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
