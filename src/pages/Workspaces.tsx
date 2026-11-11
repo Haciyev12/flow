@@ -216,16 +216,21 @@ type DetailModal =
 
 function SettingsToggle({
   label,
+  description,
   checked,
   onChange,
 }: {
   label: string;
+  description?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
     <label className="flex items-center justify-between gap-3 cursor-pointer">
-      <span className="text-[11px] text-lo">{label}</span>
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <span className="text-[11px] text-lo">{label}</span>
+        {description && <span className="text-[10px] text-dim leading-snug">{description}</span>}
+      </div>
       <button
         type="button"
         role="switch"
@@ -329,6 +334,10 @@ function WorkspaceDetail({
     });
   }
 
+  function updateBrowserMode(mode: 'new-window' | 'active-session') {
+    onUpdate({ ...workspace, browserOpenMode: mode, updatedAt: new Date().toISOString() });
+  }
+
   function handleStart() {
     if (isExecuting) return;
     start(workspace, resolvedItems);
@@ -407,6 +416,19 @@ function WorkspaceDetail({
                 Delete
               </button>
             </div>
+          </div>
+
+          {/* Browser open mode */}
+          <div className="bg-card border border-line rounded-xl px-4 py-3">
+            <p className="text-[11px] font-semibold text-dim uppercase tracking-widest mb-3">
+              Browser Settings
+            </p>
+            <SettingsToggle
+              label="Open websites in a new window"
+              description="Start opens all website tabs in a fresh Brave window. Turn off to open in your active session instead."
+              checked={workspace.browserOpenMode !== 'active-session'}
+              onChange={(v) => updateBrowserMode(v ? 'new-window' : 'active-session')}
+            />
           </div>
 
           {/* Items section */}

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AppLayout } from "./layout/AppLayout";
 import { Overview } from "./pages/Overview";
 import { Launcher } from "./pages/Launcher";
@@ -8,6 +9,16 @@ import { Settings } from "./pages/Settings";
 
 function App() {
   const [activePage, setActivePage] = useState("overview");
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("navigate", (event) => {
+      setActivePage(event.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
 
   function renderPage() {
     switch (activePage) {

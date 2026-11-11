@@ -94,6 +94,8 @@ export interface Workspace {
   itemIds: string[];
   /** Per-item execution settings keyed by LauncherItem.id. */
   itemSettings?: Record<string, WorkspaceItemSettings>;
+  /** How websites are opened when this workspace is launched. Defaults to 'new-window'. */
+  browserOpenMode?: 'new-window' | 'active-session';
   createdAt: string;
   updatedAt: string;
 }

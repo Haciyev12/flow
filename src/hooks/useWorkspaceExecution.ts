@@ -108,12 +108,15 @@ export function useWorkspaceExecution() {
       const batchIds: string[] = [];
       const batchUrls: string[] = [];
 
+      const useNewWindow = workspace.browserOpenMode !== 'active-session';
+
       for (let i = 0; i < workspace.itemIds.length; i++) {
         const id = workspace.itemIds[i];
         const item = resolvedItems[i] ?? null;
         const settings = workspace.itemSettings?.[id] ?? DEFAULT_ITEM_SETTINGS;
 
         if (
+          useNewWindow &&
           item?.type === "website" &&
           settings.autoExecute &&
           !settings.confirmBefore

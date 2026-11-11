@@ -3,7 +3,65 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Keyboard, Download, Upload, Trash2, Info,
   CheckCircle2, AlertTriangle, Pencil, X,
+  LogIn, EyeOff, Monitor, Zap,
 } from "lucide-react";
+
+// ── App settings model ────────────────────────────────────────────────────────
+
+interface AppSettings {
+  paletteShortcut: string;
+  launchAtLogin: boolean;
+  keepInBackground: boolean;
+  showMainWindowAtStartup: boolean;
+  openPaletteAtStartup: boolean;
+}
+
+function useSettings() {
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+
+  useEffect(() => {
+    invoke<AppSettings>("get_settings").then(setSettings).catch(() => {});
+  }, []);
+
+  async function updateSetting<K extends keyof AppSettings>(
+    key: K,
+    value: AppSettings[K],
+  ): Promise<string | null> {
+    if (!settings) return null;
+    const next = { ...settings, [key]: value };
+    setSettings(next);
+    return invoke<string | null>("save_app_settings", { settings: next }).catch(
+      (e) => String(e),
+    );
+  }
+
+  return { settings, updateSetting };
+}
+
+// ── Toggle ────────────────────────────────────────────────────────────────────
+
+function Toggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      onClick={() => onChange(!enabled)}
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none ${
+        enabled ? "bg-accent" : "bg-elevated"
+      }`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform ${
+          enabled ? "translate-x-[18px]" : "translate-x-[3px]"
+        }`}
+      />
+    </button>
+  );
+}
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
 
@@ -400,6 +458,13 @@ type Modal = "import" | "clear" | null;
 export function Settings() {
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const { settings, updateSetting } = useSettings();
+
+  function handleToggle<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
+    updateSetting(key, value)
+      .then((warning) => { if (warning) setToast(warning); })
+      .catch((err) => setToast(`Failed to save: ${String(err)}`));
+  }
 
   async function handleExport() {
     try {
@@ -434,6 +499,58 @@ export function Settings() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-6 space-y-8">
+
+        {/* Startup & Background */}
+        <Section title="Startup & Background">
+          {settings && (
+            <Card>
+              <Row
+                icon={<LogIn size={16} strokeWidth={1.8} />}
+                label="Launch at Login"
+                description="Start Flow automatically when you log in. Requires the app installed in /Applications."
+                action={
+                  <Toggle
+                    enabled={settings.launchAtLogin}
+                    onChange={(v) => handleToggle("launchAtLogin", v)}
+                  />
+                }
+              />
+              <Row
+                icon={<EyeOff size={16} strokeWidth={1.8} />}
+                label="Keep Running in Background"
+                description="Closing the main window hides Flow instead of quitting it."
+                action={
+                  <Toggle
+                    enabled={settings.keepInBackground}
+                    onChange={(v) => handleToggle("keepInBackground", v)}
+                  />
+                }
+              />
+              <Row
+                icon={<Monitor size={16} strokeWidth={1.8} />}
+                label="Show Main Window at Startup"
+                description="Open the main Flow window when the app launches."
+                action={
+                  <Toggle
+                    enabled={settings.showMainWindowAtStartup}
+                    onChange={(v) => handleToggle("showMainWindowAtStartup", v)}
+                  />
+                }
+              />
+              <Row
+                icon={<Zap size={16} strokeWidth={1.8} />}
+                label="Open Command Palette at Startup"
+                description="Show the command palette immediately after Flow launches."
+                action={
+                  <Toggle
+                    enabled={settings.openPaletteAtStartup}
+                    onChange={(v) => handleToggle("openPaletteAtStartup", v)}
+                  />
+                }
+              />
+            </Card>
+          )}
+        </Section>
 
         {/* Global shortcut */}
         <Section title="Shortcuts">
